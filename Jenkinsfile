@@ -1,40 +1,41 @@
 pipeline {
     agent any
-
-    parameters {
-        string(name: 'DOCKER_IMAGE', description: 'Docker image name', defaultValue: 'java-app')
-        string(name: 'NEXUS_REGISTRY', description: 'Nexus repository URL', defaultValue: 'http://192.168.185.158:8081/')
-        credentials(name: 'NEXUS_CREDENTIALS', description: 'Nexus credentials', defaultValue: 'Nexus', required: true, credentialType: 'UsernamePassword')
+     tools {
+     maven 'MAVEN3'
+     }
+    environment {
+        
+        DOCKER_REGISTRY = 'http://192.168.185.158:8082/repository/my-docker-registry/'
+        DOCKER_IMAGE_NAME = "app:${BUILD_NUMBER}"
     }
 
     stages {
-        stage('Build Docker Image') {
+
+        stage ('SCM Import'){
+        checkout scmGit(branches: [[name: '*/master']], 
+                        extensions: [], 
+                        userRemoteConfigs: [[url: 'https://github.com/AlaaiDwidar/simple-java-maven-app.git']])
+        }
+        
+        stage('Maven Build'){
+                    sh "mvn clean package -DskipTests=true"
+                    archive 'target/*.jar'
+        }
+
+        stage('Build Image') {
             steps {
-                script {
-                    try {
-                        def dockerImage = docker.build("${params.DOCKER_IMAGE}:${env.BUILD_NUMBER}", '-f ./Dockerfile .')
-                        dockerImage.inside {
-                            sh 'cp ./SampleWebApp.war /usr/local/tomcat/webapps/SampleWebApp.war'
-                        }
-                    } catch (Exception e) {
-                        currentBuild.result = 'FAILURE'
-                        error("Failed to build Docker image: ${e.message}")
-                    }
-                }
+                echo 'Building Image ...'
+                sh "docker build -t ${DOCKER_REGISTRY}/${DOCKER_IMAGE_NAME} ."
             }
         }
-        stage('Push to Nexus') {
+
+        stage('Push Image to Nexus') {
             steps {
-                script {
-                    try {
-                        def dockerImage = docker.image("${params.DOCKER_IMAGE}:${env.BUILD_NUMBER}")
-                        docker.withRegistry("${params.NEXUS_REGISTRY}", "${params.NEXUS_CREDENTIALS}") {
-                            dockerImage.push()
-                        }
-                    } catch (Exception e) {
-                        currentBuild.result = 'FAILURE'
-                        error("Failed to push Docker image to Nexus: ${e.message}")
-                    }
+                echo 'Pushing image to Docker hosted repository on Nexus'
+                withCredentials([usernamePassword(credentialsId: 'Nexus', passwordVariable: 'PSW', usernameVariable: 'USER')]) {
+                    sh "docker login -u ${USER} -p ${PSW} 192.168.185.158:8082"
+                    sh "docker push ${DOCKER_REGISTRY}/${DOCKER_IMAGE_NAME}"
+                    sh "docker image rm ${DOCKER_REGISTRY}/${DOCKER_IMAGE_NAME}"
                 }
             }
         }
